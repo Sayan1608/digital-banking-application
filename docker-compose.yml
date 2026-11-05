@@ -1,0 +1,197 @@
+name: ${COMPOSE_PROJECT_NAME:-dbank}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+services:
+  # ─────────────────────────────────────────────────────────
+  # MySQL — system of record for account/ledger state
+  # ─────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:${MYSQL_VERSION:-8.0.40}
+    container_name: dbank-mysql
+    <<: *default-restart
+    logging: *default-logging
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+      - --transaction-isolation=READ-COMMITTED
+      - --innodb-flush-log-at-trx-commit=1
+      - --sync-binlog=1
+      - --max-connections=500
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: UTC
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./infra/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks: [dbank]
+
+  # ─────────────────────────────────────────────────────────
+  # Redis — session cache, idempotency keys, distributed locks
+  # ─────────────────────────────────────────────────────────
+  redis:
+    image: redis:${REDIS_VERSION:-7.4-alpine}
+    container_name: dbank-redis
+    <<: *default-restart
+    logging: *default-logging
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${REDIS_PASSWORD}"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "PING"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks: [dbank]
+
+  # ─────────────────────────────────────────────────────────
+  # Zookeeper — Kafka coordination
+  # ─────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:${CONFLUENT_VERSION:-7.7.1}
+    container_name: dbank-zookeeper
+    <<: *default-restart
+    logging: *default-logging
+    environment:
+      ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_CLIENT_PORT:-2181}
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_INIT_LIMIT: 5
+      ZOOKEEPER_SYNC_LIMIT: 2
+      ZOOKEEPER_AUTOPURGE_PURGE_INTERVAL: 1
+      ZOOKEEPER_AUTOPURGE_SNAP_RETAIN_COUNT: 3
+      KAFKA_OPTS: "-Dzookeeper.4lw.commands.whitelist=ruok,srvr,stat"
+    ports:
+      - "${ZOOKEEPER_CLIENT_PORT:-2181}:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 | grep -q imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [dbank]
+
+  # ─────────────────────────────────────────────────────────
+  # Kafka — event backbone (payments, ledger, audit, outbox)
+  # ─────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:${CONFLUENT_VERSION:-7.7.1}
+    container_name: dbank-kafka
+    <<: *default-restart
+    logging: *default-logging
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:${ZOOKEEPER_CLIENT_PORT:-2181}"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: "INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:9092,EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT:-29092}"
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # Single-broker dev cluster: every replication factor must be 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Financial messaging defaults: no silent data loss, no auto topics
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_JMX_PORT: ${KAFKA_JMX_PORT:-9101}
+      KAFKA_JMX_HOSTNAME: localhost
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-29092}:29092"
+      - "${KAFKA_JMX_PORT:-9101}:9101"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
+    networks: [dbank]
+
+  # ─────────────────────────────────────────────────────────
+  # One-shot topic provisioning (auto-create is off by design)
+  # ─────────────────────────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:${CONFLUENT_VERSION:-7.7.1}
+    container_name: dbank-kafka-init
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/scripts/create-topics.sh"]
+    volumes:
+      - ./infra/kafka/create-topics.sh:/scripts/create-topics.sh:ro
+    networks: [dbank]
+
+  # ─────────────────────────────────────────────────────────
+  # Kafka UI — optional, `--profile tools`
+  # ─────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: dbank-kafka-ui
+    profiles: [tools]
+    <<: *default-restart
+    logging: *default-logging
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: dbank-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
+      KAFKA_CLUSTERS_0_ZOOKEEPER: "zookeeper:${ZOOKEEPER_CLIENT_PORT:-2181}"
+      DYNAMIC_CONFIG_ENABLED: "true"
+    ports:
+      - "${KAFKA_UI_PORT:-8080}:8080"
+    networks: [dbank]
+
+networks:
+  dbank:
+    name: dbank-net
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  kafka-data:
+  zookeeper-data:
+  zookeeper-log:
