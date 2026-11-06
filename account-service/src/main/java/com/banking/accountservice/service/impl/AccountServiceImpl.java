@@ -10,10 +10,10 @@ import com.banking.accountservice.service.AccountService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.security.SecureRandom;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -80,23 +80,33 @@ public class AccountServiceImpl implements AccountService {
         );
     }
 
+    private Account findAccountOrThrow(String accountNumber) {
+        return accountRepository.findByAccountNumber(accountNumber)
+                .orElseThrow(() -> new RuntimeException(
+                        "Account doesn't exist with the provided account number: " + accountNumber));
+    }
+
     @Override
-    public AccountResponse getAccount(UUID accountId) {
+    @Transactional(readOnly = true)
+    public AccountResponse getAccount(String accountNumber) {
+        return mapToResponse(findAccountOrThrow(accountNumber));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public BigDecimal getBalance(String accountNumber) {
+        BigDecimal balance = findAccountOrThrow(accountNumber).getBalance();
+        log.info("Fetched balance for account {}", accountNumber);
+        return balance;
+    }
+
+    @Override
+    public AccountResponse deductBalance(String accountNumber, BigDecimal amount) {
         throw new UnsupportedOperationException("Not implemented yet");
     }
 
     @Override
-    public BigDecimal getBalance(UUID accountId) {
-        throw new UnsupportedOperationException("Not implemented yet");
-    }
-
-    @Override
-    public AccountResponse deductBalance(UUID accountId, BigDecimal amount) {
-        throw new UnsupportedOperationException("Not implemented yet");
-    }
-
-    @Override
-    public AccountResponse creditBalance(UUID accountId, BigDecimal amount) {
+    public AccountResponse creditBalance(String accountNumber, BigDecimal amount) {
         throw new UnsupportedOperationException("Not implemented yet");
     }
 }

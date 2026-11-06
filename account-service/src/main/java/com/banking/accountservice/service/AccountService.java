@@ -4,17 +4,16 @@ import com.banking.accountservice.dto.request.CreateAccountRequest;
 import com.banking.accountservice.dto.response.AccountResponse;
 
 import java.math.BigDecimal;
-import java.util.UUID;
 
 public interface AccountService {
 
     AccountResponse createAccount(CreateAccountRequest request);
 
-    AccountResponse getAccount(UUID accountId);
+    AccountResponse getAccount(String accountNumber);
 
-    BigDecimal getBalance(UUID accountId);
+    BigDecimal getBalance(String accountNumber);
 
-    AccountResponse deductBalance(UUID accountId, BigDecimal amount);
+    AccountResponse deductBalance(String accountNumber, BigDecimal amount);
 
-    AccountResponse creditBalance(UUID accountId, BigDecimal amount);
+    AccountResponse creditBalance(String accountNumber, BigDecimal amount);
 }
