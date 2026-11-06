@@ -2,3 +2,5 @@
 .env.local
 *.log
 data/
+.idea/
+*.iml

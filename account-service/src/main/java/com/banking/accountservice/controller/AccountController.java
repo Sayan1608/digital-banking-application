@@ -37,6 +37,10 @@ public class AccountController {
         return ResponseEntity.ok(balance);
     }
 
+    /**
+     * SAGA step 1
+     * called by Transaction service when transaction is initiated
+     */
     @PutMapping("/{accountId}/deduct")
     public ResponseEntity<AccountResponse> deductBalance(@PathVariable UUID accountId,
                                                        @RequestParam BigDecimal amount) {
@@ -44,6 +48,13 @@ public class AccountController {
         return ResponseEntity.ok(response);
     }
 
+    /**
+     * SAGA step 4
+     * Compensation Transaction End Point
+     * called by Transaction Service when:
+     *  1) Fraud detected -> refund sender (undo step 1)
+     *  2) Transaction Completed -> credit receiver
+     */
     @PutMapping("/{accountId}/credit")
     public ResponseEntity<AccountResponse> creditBalance(@PathVariable UUID accountId,
                                                        @RequestParam BigDecimal amount) {

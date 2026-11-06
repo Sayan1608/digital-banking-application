@@ -8,4 +8,7 @@ import java.util.UUID;
 
 @Repository
 public interface AccountRepository extends JpaRepository<Account, UUID> {
+    boolean existsByAccountNumber(String accountNumber);
+    boolean existsByEmail(String email);
+    boolean existsByPhone(String phone);
 }

@@ -26,5 +26,6 @@ public class AccountResponse {
     private BigDecimal balance;
     private AccountType accountType;
     private AccountStatus accountStatus;
+    private BigDecimal dailyTransactionLimit;
     private LocalDateTime createdAt;
 }
