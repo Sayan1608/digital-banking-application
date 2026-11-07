@@ -13,6 +13,8 @@ public interface AccountService {
 
     BigDecimal getBalance(String accountNumber);
 
+    AccountResponse blockAccount(String accountNumber);
+
     AccountResponse deductBalance(String accountNumber, BigDecimal amount);
 
     AccountResponse creditBalance(String accountNumber, BigDecimal amount);

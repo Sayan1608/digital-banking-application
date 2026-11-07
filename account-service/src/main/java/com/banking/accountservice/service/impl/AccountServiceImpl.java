@@ -25,6 +25,9 @@ public class AccountServiceImpl implements AccountService {
 
     private final AccountRepository accountRepository;
 
+    /**
+     * To create new account for customer
+     */
     @Override
     public AccountResponse createAccount(CreateAccountRequest request) {
         if (accountRepository.existsByEmail(request.getEmail())) {
@@ -50,6 +53,10 @@ public class AccountServiceImpl implements AccountService {
 
         return mapToResponse(savedAccount);
     }
+
+    /**
+     * To create 12 digit unique account number
+     */
     private String generateUniqueAccountNumber() {
         String accountNumber;
         do{
@@ -59,12 +66,18 @@ public class AccountServiceImpl implements AccountService {
         return accountNumber;
     }
 
+    /**
+     * To calculate daily transaction limit based on account type
+     */
     private BigDecimal calculateDailyLimit(AccountType accountType) {
         return accountType == AccountType.SAVINGS
                 ? new BigDecimal("100000")
                 : new BigDecimal("500000");
     }
 
+    /**
+     * To map Account entity to AccountResponse DTO
+     */
     private AccountResponse mapToResponse(Account account) {
         return new AccountResponse(
                 account.getId(),
@@ -80,18 +93,27 @@ public class AccountServiceImpl implements AccountService {
         );
     }
 
+    /**
+     * To find an account by its number or throw an exception if not found
+     */
     private Account findAccountOrThrow(String accountNumber) {
         return accountRepository.findByAccountNumber(accountNumber)
                 .orElseThrow(() -> new RuntimeException(
                         "Account doesn't exist with the provided account number: " + accountNumber));
     }
 
+    /**
+     * To get customer account details by account number
+     */
     @Override
     @Transactional(readOnly = true)
     public AccountResponse getAccount(String accountNumber) {
         return mapToResponse(findAccountOrThrow(accountNumber));
     }
 
+    /**
+     * To get customer account balance by account number
+     */
     @Override
     @Transactional(readOnly = true)
     public BigDecimal getBalance(String accountNumber) {
@@ -100,12 +122,48 @@ public class AccountServiceImpl implements AccountService {
         return balance;
     }
 
+    /**
+     * To block a customer's account.
+     * Called by the Fraud Detection service when a fraudulent transaction is detected.
+     * Idempotent: blocking an already blocked account is a no-op.
+     */
     @Override
+    @Transactional
+    public AccountResponse blockAccount(String accountNumber) {
+        Account account = findAccountOrThrow(accountNumber);
+
+        if (account.getAccountStatus() == AccountStatus.CLOSED) {
+            throw new RuntimeException("Account is closed and cannot be blocked: " + accountNumber);
+        }
+
+        if (account.getAccountStatus() == AccountStatus.BLOCKED) {
+            log.info("Account {} is already blocked, skipping", accountNumber);
+            return mapToResponse(account);
+        }
+
+        account.setAccountStatus(AccountStatus.BLOCKED);
+        Account blockedAccount = accountRepository.save(account);
+        log.warn("Blocked account {} due to suspected fraud", accountNumber);
+
+        return mapToResponse(blockedAccount);
+    }
+
+    /**
+     * To deduct balance from a customer's account
+     */
+    @Override
+    @Transactional
     public AccountResponse deductBalance(String accountNumber, BigDecimal amount) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        Account account = findAccountOrThrow(accountNumber);
+        BigDecimal newBalance = account.getBalance().subtract(amount);
+        account.setBalance(newBalance);
+        Account updatedAccount = accountRepository.save(account);
+        log.info("Deducted {} from account {}", amount, accountNumber);
+        return mapToResponse(updatedAccount);
     }
 
     @Override
+    @Transactional
     public AccountResponse creditBalance(String accountNumber, BigDecimal amount) {
         throw new UnsupportedOperationException("Not implemented yet");
     }
