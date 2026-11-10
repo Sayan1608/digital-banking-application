@@ -23,15 +23,30 @@ spring:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:29092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
       acks: all
     consumer:
       group-id: account-service
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      # A payload that cannot be parsed is handed to the error handler instead of
+      # being thrown inside the poll loop, so one bad record cannot wedge the partition.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
       properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
+        # Events are consumed as plain Maps, so the producer's __TypeId__ header is
+        # ignored: this service needs no copy of the producing service's event classes.
+        spring.json.use.type.headers: false
+        spring.json.value.default.type: java.util.LinkedHashMap
         spring.json.trusted.packages: com.banking.*
+
+# Topics are provisioned in infra/kafka/create-topics.sh and the broker has
+# auto-create disabled, so these names must match that script exactly.
+app:
+  kafka:
+    topics:
+      transaction-completed: ${TOPIC_TRANSACTION_COMPLETED:transfer.saga.events}
+      fraud-detected: ${TOPIC_FRAUD_DETECTED:fraud.alerts}
 
 server:
   port: ${SERVER_PORT:8081}

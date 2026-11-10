@@ -109,6 +109,7 @@ public class AccountServiceImpl implements AccountService {
      */
     private void validateAmount(BigDecimal amount) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("Rejected transaction: invalid amount {}", amount);
             throw new RuntimeException("Transaction amount must be greater than zero, but was: " + amount);
         }
     }
