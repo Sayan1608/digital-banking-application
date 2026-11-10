@@ -15,6 +15,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.security.SecureRandom;
 
+import static com.banking.accountservice.entity.AccountStatus.ACTIVE;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -45,7 +47,7 @@ public class AccountServiceImpl implements AccountService {
         account.setEmail(request.getEmail());
         account.setBalance(request.getInitialDepositAmount());
         account.setAccountType(request.getAccountType());
-        account.setAccountStatus(AccountStatus.ACTIVE);
+        account.setAccountStatus(ACTIVE);
         account.setDailyTransactionLimit(calculateDailyLimit(request.getAccountType()));
 
         Account savedAccount = accountRepository.save(account);
@@ -103,6 +105,15 @@ public class AccountServiceImpl implements AccountService {
     }
 
     /**
+     * To validate that a transaction amount is present and strictly positive
+     */
+    private void validateAmount(BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Transaction amount must be greater than zero, but was: " + amount);
+        }
+    }
+
+    /**
      * To get customer account details by account number
      */
     @Override
@@ -150,11 +161,23 @@ public class AccountServiceImpl implements AccountService {
 
     /**
      * To deduct balance from a customer's account
+     * Called by the Transaction service when a transaction is initiated.
      */
     @Override
     @Transactional
     public AccountResponse deductBalance(String accountNumber, BigDecimal amount) {
+        log.info("Attempting to deduct {} from account {}", amount, accountNumber);
+        validateAmount(amount);
         Account account = findAccountOrThrow(accountNumber);
+
+        if(!ACTIVE.equals(account.getAccountStatus())) {
+            throw new RuntimeException("Account is not active " + accountNumber);
+        }
+
+        if(account.getBalance().compareTo(amount) < 0) {
+            throw new RuntimeException("Insufficient balance in account " + accountNumber);
+        }
+
         BigDecimal newBalance = account.getBalance().subtract(amount);
         account.setBalance(newBalance);
         Account updatedAccount = accountRepository.save(account);
@@ -162,9 +185,28 @@ public class AccountServiceImpl implements AccountService {
         return mapToResponse(updatedAccount);
     }
 
+    /**
+     * To credit balance into a customer's account.
+     * called by the Transaction Service from kafka
+     * Called by the Transaction service when funds are received.
+     * Only an ACTIVE account can be credited.
+     */
     @Override
     @Transactional
     public AccountResponse creditBalance(String accountNumber, BigDecimal amount) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        log.info("Attempting to credit {} to account {}", amount, accountNumber);
+        validateAmount(amount);
+        Account account = findAccountOrThrow(accountNumber);
+
+        if (!ACTIVE.equals(account.getAccountStatus())) {
+            log.warn("Credit rejected for account {}: account status is {}", accountNumber, account.getAccountStatus());
+            throw new RuntimeException("Account is not active " + accountNumber);
+        }
+
+        BigDecimal newBalance = account.getBalance().add(amount);
+        account.setBalance(newBalance);
+        Account updatedAccount = accountRepository.save(account);
+        log.info("Credited {} to account {}", amount, accountNumber);
+        return mapToResponse(updatedAccount);
     }
 }
